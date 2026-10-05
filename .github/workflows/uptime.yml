@@ -12,12 +12,6 @@ name: Uptime
 # Caveats:
 #   - GitHub cron is best-effort: runs can start late or be skipped under load.
 #   - `schedule` only fires from the DEFAULT branch (main): merge this file there.
-#   - Billing: this repo is private and every run is billed as at least one
-#     minute. Every 5 minutes is ~8,640 minutes a month, above the allowance of
-#     a personal account (2,000/month on Free, 3,000 on Pro). When it runs out
-#     under a $0 spending limit, ALL workflows stop, deploys included. Set a
-#     spending limit, or slow this down ('*/15' is ~2,900 min), or replace it
-#     with a free external monitor.
 
 on:
   schedule:
