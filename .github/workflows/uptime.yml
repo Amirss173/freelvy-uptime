@@ -11,6 +11,7 @@ name: Uptime
 #
 # Caveats:
 #   - GitHub cron is best-effort: runs can start late or be skipped under load.
+#     (05/10: re-pushed so GitHub registers the schedule.)
 #   - `schedule` only fires from the DEFAULT branch (main): merge this file there.
 
 on:
