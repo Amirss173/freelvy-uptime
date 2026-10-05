@@ -1,0 +1,85 @@
+name: Uptime
+
+# External uptime check: works even when the droplet is completely down, which
+# the on-host watchdog (ops/veille in the freelvy-agent repo) cannot see.
+#
+# Every 5 minutes it fetches the login page and the agent health. A URL counts
+# as down only after 3 failed attempts 30 s apart (about 1 minute), so a
+# container restart during a deploy does not page anyone. On failure it sends a
+# Telegram message (repo secrets TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID). No
+# dedup beyond that: while the site is down, one message per run.
+#
+# Caveats:
+#   - GitHub cron is best-effort: runs can start late or be skipped under load.
+#   - `schedule` only fires from the DEFAULT branch (main): merge this file there.
+#   - Billing: this repo is private and every run is billed as at least one
+#     minute. Every 5 minutes is ~8,640 minutes a month, above the allowance of
+#     a personal account (2,000/month on Free, 3,000 on Pro). When it runs out
+#     under a $0 spending limit, ALL workflows stop, deploys included. Set a
+#     spending limit, or slow this down ('*/15' is ~2,900 min), or replace it
+#     with a free external monitor.
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: uptime
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check app.freelvy.com
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Probe and alert
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          BASE_URL: ${{ vars.UPTIME_BASE_URL || 'https://app.freelvy.com' }}
+        run: |
+          set -uo pipefail
+
+          # The login page answers 200.
+          site_ok() { [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 15 "$BASE_URL/login")" = "200" ]; }
+          # The agent health says "status":"ok", which it only does when its database answers.
+          agent_ok() {
+            local body
+            body="$(curl -s --max-time 15 "$BASE_URL/agent-api/api/health")" || return 1
+            body="${body//[[:space:]]/}"
+            [[ "$body" == *'"status":"ok"'* ]]
+          }
+          # down CHECK: true when CHECK failed 3 times, 30 s apart.
+          down() {
+            local i
+            for i in 1 2 3; do
+              if "$1"; then return 1; fi
+              echo "$1: attempt $i failed"
+              if [ "$i" -lt 3 ]; then sleep 30; fi
+            done
+            return 0
+          }
+
+          problems=""
+          if down site_ok; then problems="$problems
+          - le site (page de connexion) ne répond pas"; fi
+          if down agent_ok; then problems="$problems
+          - l'assistant IA (ou sa base de données) ne répond pas"; fi
+          if [ -z "$problems" ]; then echo "All good."; exit 0; fi
+
+          text="🔴 Contrôle externe : Freelvy semble en panne vu d'internet (3 essais en 1 minute).$problems
+          Que faire : transférez ce message à Claude (ou à votre développeur). Si plus rien ne répond, le serveur lui-même est peut-être arrêté : regardez le droplet sur DigitalOcean."
+          echo "$text"
+          if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
+            echo "::error::Freelvy is down and Telegram is not configured."
+            exit 1
+          fi
+          printf 'url = "https://api.telegram.org/bot%s/sendMessage"\n' "$TELEGRAM_BOT_TOKEN" \
+            | curl -sS -o /dev/null --max-time 15 -K - --data-urlencode "chat_id=$TELEGRAM_CHAT_ID" \
+                --data-urlencode "text=$text" --data "disable_web_page_preview=true" || echo "Telegram send failed."
+          # Red run in the Actions tab as well.
+          exit 1
